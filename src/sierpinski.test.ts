@@ -9,12 +9,13 @@ import {
   toBitString,
 } from "./bits.ts";
 import { normalizeLon } from "./geo.ts";
-import { octantForLatLon } from "./octants.ts";
+import { OCTANT_TRIANGLES, octantForLatLon } from "./octants.ts";
 import {
   RESERVED_BIT,
   decode,
   encode,
 } from "./sierpinski.ts";
+import { childAt } from "./triangle.ts";
 
 describe("normalizeLon", () => {
   it("maps into (-180, 180]", () => {
@@ -95,6 +96,22 @@ describe("encode", () => {
     const coordinate = encode(45, 45, 0);
     expect(coordinate).toBe(RESERVED_BIT * 8 + 0b000);
     expect(formatCoordinate(coordinate, 0)).toBe("0000");
+  });
+
+  it("uses child 0 for the center, then corners A, B, and C", () => {
+    const parent = OCTANT_TRIANGLES[0]!;
+    expect(childAt(parent, 1).a).toEqual(parent.a);
+    expect(childAt(parent, 2).a).toEqual(parent.b);
+    expect(childAt(parent, 3).a).toEqual(parent.c);
+    expect(childAt(parent, 0).a).not.toEqual(parent.a);
+  });
+
+  it("keeps trailing zero children on the octant centroid", () => {
+    const { lat, lon } = decode(0b0000, 0);
+    expect(encode(lat, lon, 8)).toBe(0b0000);
+    const nested = decode(0b0000, 8);
+    expect(nested.lat).toBeCloseTo(lat);
+    expect(nested.lon).toBeCloseTo(lon);
   });
 
   it("keeps the header in the high 4 bits as levels are added", () => {

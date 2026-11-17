@@ -14,11 +14,12 @@ export type SphericalTriangle = {
 };
 
 /**
- * Child index (the 2-bit field after the 4-bit header), relative to parent A,B,C:
- * - 0 (bits 00): corner at A → (A, midAB, midCA)
- * - 1 (bits 01): corner at B → (B, midBC, midAB)
- * - 2 (bits 10): corner at C → (C, midCA, midBC)
- * - 3 (bits 11): central     → (midAB, midBC, midCA)
+ * Child index (the 2-bit field after the 4-bit header), relative to parent A,B,C.
+ * Index 0 is the middle child, so trailing zeros stay on the centroid.
+ * - 0 (bits 00): central     → (midAB, midBC, midCA)
+ * - 1 (bits 01): corner at A → (A, midAB, midCA)
+ * - 2 (bits 10): corner at B → (B, midBC, midAB)
+ * - 3 (bits 11): corner at C → (C, midCA, midBC)
  */
 export type ChildIndex = 0 | 1 | 2 | 3;
 
@@ -38,10 +39,10 @@ export function subdivide(
   const midBC = midpoint(t.b, t.c);
   const midCA = midpoint(t.c, t.a);
   return [
+    { a: midAB, b: midBC, c: midCA },
     { a: t.a, b: midAB, c: midCA },
     { a: t.b, b: midBC, c: midAB },
     { a: t.c, b: midCA, c: midBC },
-    { a: midAB, b: midBC, c: midCA },
   ];
 }
 
