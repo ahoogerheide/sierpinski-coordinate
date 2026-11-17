@@ -1,3 +1,4 @@
+import { bitLengthForLevels } from "../src/bits.ts";
 import { OCTANT_TRIANGLES } from "../src/octants.ts";
 import { centroid, childAt } from "../src/triangle.ts";
 import { cross, dot } from "../src/vec3.ts";
@@ -15,25 +16,22 @@ function vertexErrorMeters(tri, vertex) {
   return angularDistance(centroid(tri), vertex) * EARTH_RADIUS_M;
 }
 
+/** Plain meters. Below 10 m, three significant digits (so sub-meter values stay within that cap). */
+function formatMeters(meters) {
+  if (meters < 100) {
+    return Number(meters.toPrecision(3)).toString();
+  }
+  return Math.round(meters).toString();
+}
+
 // Level 0 worst locations are the three octant corners; they tie.
 // Follow the north-pole corner. Child 0 keeps that vertex.
 let tri = OCTANT_TRIANGLES[0];
-const location = tri.a;
 
-const rows = [];
-for (let level = 0; level <= 32; level++) {
-  const meters = vertexErrorMeters(tri, location);
+for (let level = 0; level <= 30; level++) {
   const verts = [tri.a, tri.b, tri.c].map((v) => vertexErrorMeters(tri, v));
-  rows.push({
-    level,
-    meters,
-    cellMaxMeters: Math.max(...verts),
-  });
-  if (level < 32) tri = childAt(tri, 0);
-}
-
-for (const row of rows) {
-  console.log(
-    `${row.level}\t${row.meters.toExponential(10)}\t${row.cellMaxMeters.toExponential(10)}`,
-  );
+  const maxMeters = Math.max(...verts);
+  const bits = bitLengthForLevels(level);
+  console.log(`${level}\t${formatMeters(maxMeters)}\t${bits}`);
+  tri = childAt(tri, 0);
 }
