@@ -1,7 +1,12 @@
 import "./style.css";
 import {
+  HEADER_WIDTH,
+  OCTANT_WIDTH,
   decode,
   encode,
+  formatCoordinate,
+  parseCoordinate,
+  toBitString,
   type DecodeResult,
 } from "../../src/index.ts";
 
@@ -175,11 +180,12 @@ function runEncode(): void {
     const lat = Number(latInput.value);
     const lon = Number(lonInput.value);
     const levels = Number(levelsInput.value);
-    const bits = encode(lat, lon, levels);
+    const coordinate = encode(lat, lon, levels);
+    const bits = formatCoordinate(coordinate, levels);
     encodeOut.textContent = bits;
     bitsInput.value = bits;
     showError(encodeError, null);
-    const result = decode(bits);
+    const result = decode(coordinate, levels);
     renderDecode(result, { lat, lon });
   } catch (err) {
     showError(encodeError, err instanceof Error ? err.message : String(err));
@@ -194,8 +200,8 @@ function renderDecode(
     <span><strong>lat</strong> ${formatCoord(result.lat)}°</span>
     <span><strong>lon</strong> ${formatCoord(result.lon)}°</span>
     <span><strong>levels</strong> ${result.levels}</span>
-    <span><strong>header</strong> ${result.header}</span>
-    <span><strong>octant</strong> ${result.octant}</span>
+    <span><strong>header</strong> ${toBitString(result.header, HEADER_WIDTH)}</span>
+    <span><strong>octant</strong> ${toBitString(result.octant, OCTANT_WIDTH)}</span>
   `;
   drawSketch(result, probe);
 }
@@ -203,7 +209,8 @@ function renderDecode(
 function runDecode(): void {
   try {
     const bits = bitsInput.value.trim().replace(/\s+/g, "");
-    const result = decode(bits);
+    const { coordinate, levels } = parseCoordinate(bits);
+    const result = decode(coordinate, levels);
     showError(decodeError, null);
     encodeOut.textContent = bits;
     renderDecode(result);

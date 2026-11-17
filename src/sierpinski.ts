@@ -1,29 +1,37 @@
+import {
+  BITS_PER_LEVEL,
+  HEADER_WIDTH,
+  OCTANT_WIDTH,
+  safeBitLength,
+} from "./bits.ts";
 import { clampLat, latLonToVec, normalizeLon, vecToLatLon } from "./geo.ts";
 import {
   OCTANT_TRIANGLES,
   octantForLatLon,
-  octantFromBits,
+  type OctantCode,
 } from "./octants.ts";
 import {
-  CHILD_BITS,
+  centroid,
   childAt,
   childIndexContaining,
-  centroid,
   triangleCornersLatLon,
+  type ChildIndex,
   type SphericalTriangle,
 } from "./triangle.ts";
 
-/** Leading reserved bit of the 4-bit header; always 0. */
-export const RESERVED_BIT = "0";
+/** High bit of the 4-bit header. Always 0. The octant occupies the other 3. */
+export const RESERVED_BIT = 0;
+
+const CHILD_BASE = 2 ** BITS_PER_LEVEL;
 
 export type DecodeResult = {
   lat: number;
   lon: number;
   levels: number;
-  /** 3-bit octant code (e.g. "000"). */
-  octant: string;
-  /** Full 4-bit header: reserved bit + octant (`0` + octant). */
-  header: string;
+  /** Low 3 bits of the header (0–7). */
+  octant: OctantCode;
+  /** The 4-bit header: reserved bit in bit 3, octant in bits 2–0. */
+  header: number;
   bounds: [
     { lat: number; lon: number },
     { lat: number; lon: number },
@@ -31,91 +39,82 @@ export type DecodeResult = {
   ];
 };
 
-/** Expected bit-string length for a given recursion depth: 4 + 2*levels. */
-export function bitLengthForLevels(levels: number): number {
-  if (!Number.isInteger(levels) || levels < 0) {
-    throw new Error(`levels must be a non-negative integer, got ${levels}`);
-  }
-  return 4 + 2 * levels;
+/** 4-bit header. Octant is inside it; this does not append another 3 bits. */
+function packHeader(octant: OctantCode): number {
+  return RESERVED_BIT * 2 ** OCTANT_WIDTH + octant;
 }
 
-/** Parse levels from a bit string; throws if length is invalid. */
-export function levelsFromBitLength(bitLen: number): number {
-  if (bitLen < 4 || (bitLen - 4) % 2 !== 0) {
-    throw new Error(
-      `Invalid bit length ${bitLen}; expected 4 + 2*levels (levels ≥ 0)`,
-    );
-  }
-  return (bitLen - 4) / 2;
-}
-
-function assertBinaryString(bits: string): void {
-  if (!/^[01]+$/.test(bits)) {
-    throw new Error("Bit string must contain only characters '0' and '1'");
-  }
+function splitHeader(header: number): { reserved: number; octant: OctantCode } {
+  return {
+    reserved: Math.trunc(header / 2 ** OCTANT_WIDTH),
+    octant: (header % 2 ** OCTANT_WIDTH) as OctantCode,
+  };
 }
 
 /**
- * Encode latitude/longitude into a Sierpinski coordinate bit string.
+ * Encode latitude/longitude as a Sierpinski coordinate.
  *
- * Layout: 4-bit header = reserved `0` + 3-bit octant, then 2 bits per level.
- * Bit length = 4 + 2*levels.
+ * The integer's fixed-width pattern (width = 4 + 2*levels), MSB first:
+ * reserved bit `0`, then the 3-bit octant, then 2 bits per level.
+ * `levels` is required to recover that width, because leading zeros
+ * (including the reserved bit) do not change the numeric value.
  */
-export function encode(
-  latDeg: number,
-  lonDeg: number,
-  levels: number,
-): string {
+export function encode(latDeg: number, lonDeg: number, levels: number): number {
   if (!Number.isFinite(latDeg) || !Number.isFinite(lonDeg)) {
     throw new Error("lat and lon must be finite numbers");
   }
-  if (!Number.isInteger(levels) || levels < 0) {
-    throw new Error(`levels must be a non-negative integer, got ${levels}`);
-  }
+  safeBitLength(levels);
 
   const lat = clampLat(latDeg);
   const lon = normalizeLon(lonDeg);
   const octant = octantForLatLon(lat, lon);
   const p = latLonToVec(lat, lon);
 
-  let tri: SphericalTriangle = OCTANT_TRIANGLES[octant];
-  let out = RESERVED_BIT + octant;
+  let tri: SphericalTriangle = OCTANT_TRIANGLES[octant]!;
+  let coordinate = packHeader(octant);
 
   for (let i = 0; i < levels; i++) {
     const idx = childIndexContaining(tri, p);
-    out += CHILD_BITS[idx];
+    coordinate = coordinate * CHILD_BASE + idx;
     tri = childAt(tri, idx);
   }
 
-  return out;
+  return coordinate;
 }
 
 /**
- * Decode a Sierpinski coordinate bit string.
+ * Decode a Sierpinski coordinate.
+ * `levels` selects the pattern width (4 + 2*levels). The high 4 bits of that
+ * pattern are the header.
  * Returns the spherical centroid of the addressed triangle, plus corners.
  */
-export function decode(bits: string): DecodeResult {
-  assertBinaryString(bits);
-  const levels = levelsFromBitLength(bits.length);
+export function decode(coordinate: number, levels: number): DecodeResult {
+  const width = safeBitLength(levels);
+  const limit = 2 ** width;
+  if (!Number.isSafeInteger(coordinate) || coordinate < 0 || coordinate >= limit) {
+    throw new Error(`coordinate ${coordinate} does not fit in ${width} bits`);
+  }
 
-  const reserved = bits[0]!;
+  const header = Math.trunc(coordinate / CHILD_BASE ** levels);
+  if (header >= 2 ** HEADER_WIDTH) {
+    throw new Error(
+      `header ${header} does not fit in ${HEADER_WIDTH} bits`,
+    );
+  }
+
+  const { reserved, octant } = splitHeader(header);
   if (reserved !== RESERVED_BIT) {
     throw new Error(
       `Unsupported reserved bit '${reserved}'; expected '${RESERVED_BIT}'`,
     );
   }
 
-  const octantBits = bits.slice(1, 4);
-  const octant = octantFromBits(octantBits);
-  let tri: SphericalTriangle = OCTANT_TRIANGLES[octant];
-
+  let tri: SphericalTriangle = OCTANT_TRIANGLES[octant]!;
+  const children = coordinate % CHILD_BASE ** levels;
   for (let i = 0; i < levels; i++) {
-    const pair = bits.slice(4 + 2 * i, 6 + 2 * i);
-    const idx = CHILD_BITS.indexOf(pair as (typeof CHILD_BITS)[number]);
-    if (idx < 0) {
-      throw new Error(`Invalid child bits '${pair}' at level ${i}`);
-    }
-    tri = childAt(tri, idx as 0 | 1 | 2 | 3);
+    const place = CHILD_BASE ** (levels - 1 - i);
+    const idx = (Math.trunc(children / place) % CHILD_BASE) as ChildIndex;
+    tri = childAt(tri, idx);
   }
 
   const { lat, lon } = vecToLatLon(centroid(tri));
@@ -123,26 +122,8 @@ export function decode(bits: string): DecodeResult {
     lat,
     lon,
     levels,
-    octant: octantBits,
-    header: RESERVED_BIT + octantBits,
+    octant,
+    header,
     bounds: triangleCornersLatLon(tri),
   };
 }
-
-/** Validate bit length only (does not check reserved/octant content). */
-export function isValidBitLength(bits: string): boolean {
-  try {
-    levelsFromBitLength(bits.length);
-    return /^[01]+$/.test(bits);
-  } catch {
-    return false;
-  }
-}
-
-export {
-  normalizeLon,
-  clampLat,
-  octantForLatLon,
-  CHILD_BITS,
-  OCTANT_TRIANGLES,
-};
