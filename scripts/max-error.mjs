@@ -16,22 +16,24 @@ function vertexErrorMeters(tri, vertex) {
   return angularDistance(centroid(tri), vertex) * EARTH_RADIUS_M;
 }
 
-/** Plain meters. Below 10 m, three significant digits (so sub-meter values stay within that cap). */
+/** Below 100 m, three significant digits. At 100 m and above, whole meters. */
 function formatMeters(meters) {
   if (meters < 100) {
-    return Number(meters.toPrecision(3)).toString();
+    return `${Number(meters.toPrecision(3))} m`;
   }
-  return Math.round(meters).toString();
+  return `${Math.round(meters).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ")} m`;
 }
 
 // Level 0 worst locations are the three octant corners; they tie.
 // Follow the north-pole corner. Child 0 keeps that vertex.
 let tri = OCTANT_TRIANGLES[0];
 
+console.log("level\tbits\tmax-error");
+
 for (let level = 0; level <= 30; level++) {
   const verts = [tri.a, tri.b, tri.c].map((v) => vertexErrorMeters(tri, v));
   const maxMeters = Math.max(...verts);
   const bits = bitLengthForLevels(level);
-  console.log(`${level}\t${formatMeters(maxMeters)}\t${bits}`);
+  console.log(`${level}\t${bits}\t${formatMeters(maxMeters)}`);
   tri = childAt(tri, 0);
 }
