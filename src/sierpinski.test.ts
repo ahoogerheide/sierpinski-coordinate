@@ -32,14 +32,14 @@ describe("octantForLatLon", () => {
   });
 
   it("covers all eight octants at mid-band points", () => {
-    expect(octantForLatLon(30, 45)).toBe(0b000);
-    expect(octantForLatLon(30, 135)).toBe(0b001);
-    expect(octantForLatLon(30, -135)).toBe(0b010);
-    expect(octantForLatLon(30, -45)).toBe(0b011);
-    expect(octantForLatLon(-30, 45)).toBe(0b100);
-    expect(octantForLatLon(-30, 135)).toBe(0b101);
-    expect(octantForLatLon(-30, -135)).toBe(0b110);
-    expect(octantForLatLon(-30, -45)).toBe(0b111);
+    expect(octantForLatLon(30, 45)).toBe(0b000); // (+, +, +)
+    expect(octantForLatLon(30, 135)).toBe(0b001); // (−, +, +)
+    expect(octantForLatLon(30, -45)).toBe(0b010); // (+, −, +)
+    expect(octantForLatLon(30, -135)).toBe(0b011); // (−, −, +)
+    expect(octantForLatLon(-30, 45)).toBe(0b100); // (+, +, −)
+    expect(octantForLatLon(-30, 135)).toBe(0b101); // (−, +, −)
+    expect(octantForLatLon(-30, -45)).toBe(0b110); // (+, −, −)
+    expect(octantForLatLon(-30, -135)).toBe(0b111); // (−, −, −)
   });
 
   it("puts the equator on northern octants", () => {
