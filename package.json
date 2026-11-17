@@ -1,0 +1,21 @@
+{
+  "name": "sierpinski-coordinate",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "vite --config examples/browser-demo/vite.config.ts",
+    "build": "tsc && vite build --config examples/browser-demo/vite.config.ts",
+    "preview": "vite preview --config examples/browser-demo/vite.config.ts",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "~7.0.2",
+    "vite": "^8.3.6",
+    "vitest": "^5.1.0"
+  }
+}
