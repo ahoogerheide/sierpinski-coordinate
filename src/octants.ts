@@ -3,13 +3,11 @@ import type { SphericalTriangle } from "./triangle.ts";
 import { clampLat, normalizeLon } from "./geo.ts";
 
 /**
- * Octant index. This is the low 3 bits of the 4-bit header
- * (`0` + octant), not a field stored in addition to that header.
+ * Octant index. The low 3 bits of the 4-bit header (`0` + octant)
  *
- * Numbering follows the Wikipedia octant table, column "− as 1", "<"
- * (little-endian): bit 0 is the sign of x, bit 1 of y, bit 2 of z, and a
- * minus sign is 1. A zero component stays 0. Axes: +x at lon 0°, +y at
- * lon 90°, +z north.
+ * Numbering follows the Wikipedia octant table, column "− as 1", "<" (little-endian)
+ * bit 0 is the sign of x, bit 1 of y, bit 2 of z, and a minus sign is 1.
+ * A zero component stays 0. Axes: +x at lon 0°, +y at lon 90°, +z north.
  *
  * Index | Bits | (x, y, z) | Hemisphere | Lon band (normalizeLon → (-180, 180])
  * 0     | 000  | (+, +, +) | North      | [0, 90]

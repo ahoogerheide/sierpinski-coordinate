@@ -1,3 +1,19 @@
+import type {
+  Feature,
+  FeatureCollection,
+  LineString,
+  MultiLineString,
+  Point,
+  Position,
+} from "geojson";
+import greatCircle from "@turf/great-circle";
+import { GeoJSONSource, LngLatBounds, Map, setWorkerUrl } from "maplibre-gl";
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
+import "maplibre-gl/dist/maplibre-gl.css";
+
+// Vite bundles maplibre-gl away from its worker, so the default
+// sibling URL 404s. Point at the worker asset explicitly.
+setWorkerUrl(maplibreWorkerUrl);
 import "./style.css";
 import {
   HEADER_WIDTH,
@@ -60,11 +76,11 @@ app.innerHTML = `
   </div>
 
   <section class="sketch-wrap">
-    <h2>Triangle sketch</h2>
-    <canvas id="sketch" width="900" height="420" aria-label="Equirectangular sketch of current triangle"></canvas>
+    <h2>Triangle</h2>
+    <div id="map" role="region" aria-label="Map of the current triangle"></div>
     <p class="muted">
-      Equirectangular preview of the decoded cell (corners + centroid).
-      Great-circle sides are drawn as straight chords in lon/lat — approximate near poles.
+      The cell’s sides follow great circles. Corners and the centroid are marked;
+      encoding also marks the input point.
     </p>
   </section>
 `;
@@ -77,8 +93,168 @@ const encodeError = document.querySelector<HTMLParagraphElement>("#encode-error"
 const bitsInput = document.querySelector<HTMLTextAreaElement>("#bits")!;
 const decodeError = document.querySelector<HTMLParagraphElement>("#decode-error")!;
 const decodeMeta = document.querySelector<HTMLDivElement>("#decode-meta")!;
-const canvas = document.querySelector<HTMLCanvasElement>("#sketch")!;
-const ctx = canvas.getContext("2d")!;
+
+type Probe = { lat: number; lon: number };
+type Arc = Feature<LineString | MultiLineString>;
+
+const EMPTY: FeatureCollection = { type: "FeatureCollection", features: [] };
+
+const map = new Map({
+  container: "map",
+  style: "https://tiles.openfreemap.org/styles/liberty",
+  center: [0, 20],
+  zoom: 1,
+});
+
+let mapReady = false;
+let pendingView: { result: DecodeResult; probe?: Probe } | null = null;
+
+function pointFeature(lon: number, lat: number, kind: string): Feature<Point> {
+  return {
+    type: "Feature",
+    properties: { kind },
+    geometry: { type: "Point", coordinates: [lon, lat] },
+  };
+}
+
+function edgeArcs(
+  bounds: DecodeResult["bounds"],
+): Arc[] {
+  const corners: Position[] = bounds.map((c) => [c.lon, c.lat]);
+  return [0, 1, 2].map((i) =>
+    greatCircle(corners[i]!, corners[(i + 1) % 3]!, { npoints: 128 }),
+  );
+}
+
+function arcParts(arc: Arc): Position[][] {
+  return arc.geometry.type === "LineString"
+    ? [arc.geometry.coordinates]
+    : arc.geometry.coordinates;
+}
+
+/**
+ * Frame the cell. Longitudes are shifted toward the centroid so a date-line
+ * split stays one box. Samples at the pole are ignored for longitude: that
+ * corner's longitude is arbitrary and would stretch the view the wrong way.
+ */
+function fitToArcs(arcs: Arc[], refLon: number): void {
+  let west = Infinity;
+  let east = -Infinity;
+  let south = Infinity;
+  let north = -Infinity;
+  let count = 0;
+
+  for (const arc of arcs) {
+    for (const part of arcParts(arc)) {
+      for (const pos of part) {
+        const lon = pos[0];
+        const lat = pos[1];
+        if (lon === undefined || lat === undefined) continue;
+        south = Math.min(south, lat);
+        north = Math.max(north, lat);
+        if (Math.abs(lat) >= 89.9) continue;
+        let x = lon;
+        while (x - refLon > 180) x -= 360;
+        while (refLon - x > 180) x += 360;
+        west = Math.min(west, x);
+        east = Math.max(east, x);
+        count += 1;
+      }
+    }
+  }
+
+  if (count === 0) return;
+
+  // Web Mercator cannot represent the pole. Clamping keeps fitBounds finite.
+  const maxLat = 85;
+  south = Math.max(-maxLat, south);
+  north = Math.min(maxLat, north);
+  if (north - south < 0.05) {
+    const mid = (north + south) / 2;
+    south = mid - 0.05;
+    north = mid + 0.05;
+  }
+
+  while (west <= -180) {
+    west += 360;
+    east += 360;
+  }
+  while (west > 180) {
+    west -= 360;
+    east -= 360;
+  }
+
+  const bounds =
+    east > 180
+      ? new LngLatBounds([west, south], [east - 360, north]).adjustAntiMeridian()
+      : new LngLatBounds([west, south], [east, north]);
+
+  map.fitBounds(bounds, { padding: 40 });
+}
+
+function showTriangle(result: DecodeResult, probe?: Probe): void {
+  if (!mapReady) {
+    pendingView = { result, probe };
+    return;
+  }
+
+  const arcs = edgeArcs(result.bounds);
+  const points: Feature<Point>[] = [
+    ...result.bounds.map((c) => pointFeature(c.lon, c.lat, "corner")),
+    pointFeature(result.lon, result.lat, "centroid"),
+  ];
+  if (probe) points.push(pointFeature(probe.lon, probe.lat, "probe"));
+
+  (map.getSource("edges") as GeoJSONSource).setData({
+    type: "FeatureCollection",
+    features: arcs,
+  });
+  (map.getSource("points") as GeoJSONSource).setData({
+    type: "FeatureCollection",
+    features: points,
+  });
+  fitToArcs(arcs, result.lon);
+}
+
+map.on("load", () => {
+  map.setProjection({ type: "globe" });
+  map.addSource("edges", { type: "geojson", data: EMPTY });
+  map.addSource("points", { type: "geojson", data: EMPTY });
+  map.addLayer({
+    id: "edges",
+    type: "line",
+    source: "edges",
+    paint: {
+      "line-color": "#0f6b4c",
+      "line-width": 2,
+    },
+  });
+  map.addLayer({
+    id: "points",
+    type: "circle",
+    source: "points",
+    paint: {
+      "circle-radius": ["match", ["get", "kind"], "centroid", 5, 4],
+      "circle-color": [
+        "match",
+        ["get", "kind"],
+        "centroid",
+        "#1a1f1c",
+        "probe",
+        "#8b2e2e",
+        "#0f6b4c",
+      ],
+      "circle-stroke-width": 1,
+      "circle-stroke-color": "#fffdf8",
+    },
+  });
+  mapReady = true;
+  if (pendingView) {
+    const view = pendingView;
+    pendingView = null;
+    showTriangle(view.result, view.probe);
+  }
+});
 
 function showError(el: HTMLElement, message: string | null): void {
   if (!message) {
@@ -93,86 +269,6 @@ function showError(el: HTMLElement, message: string | null): void {
 
 function formatCoord(n: number): string {
   return n.toFixed(6);
-}
-
-function project(lat: number, lon: number): { x: number; y: number } {
-  const pad = 24;
-  const w = canvas.width - pad * 2;
-  const h = canvas.height - pad * 2;
-  const x = pad + ((lon + 180) / 360) * w;
-  const y = pad + ((90 - lat) / 180) * h;
-  return { x, y };
-}
-
-function drawSketch(result: DecodeResult | null, probe?: { lat: number; lon: number }): void {
-  const w = canvas.width;
-  const h = canvas.height;
-  ctx.clearRect(0, 0, w, h);
-
-  // Grid
-  ctx.strokeStyle = "#ddd4c4";
-  ctx.lineWidth = 1;
-  for (let lon = -180; lon <= 180; lon += 30) {
-    const { x } = project(0, lon);
-    ctx.beginPath();
-    ctx.moveTo(x, 12);
-    ctx.lineTo(x, h - 12);
-    ctx.stroke();
-  }
-  for (let lat = -90; lat <= 90; lat += 30) {
-    const { y } = project(lat, 0);
-    ctx.beginPath();
-    ctx.moveTo(12, y);
-    ctx.lineTo(w - 12, y);
-    ctx.stroke();
-  }
-
-  // Equator / prime meridian
-  ctx.strokeStyle = "#b7aa94";
-  ctx.beginPath();
-  const eq = project(0, 0);
-  ctx.moveTo(12, eq.y);
-  ctx.lineTo(w - 12, eq.y);
-  ctx.moveTo(eq.x, 12);
-  ctx.lineTo(eq.x, h - 12);
-  ctx.stroke();
-
-  if (!result) return;
-
-  const corners = result.bounds.map((c) => project(c.lat, c.lon));
-  const cen = project(result.lat, result.lon);
-
-  ctx.fillStyle = "rgba(15, 107, 76, 0.18)";
-  ctx.strokeStyle = "#0f6b4c";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(corners[0]!.x, corners[0]!.y);
-  for (let i = 1; i < corners.length; i++) {
-    ctx.lineTo(corners[i]!.x, corners[i]!.y);
-  }
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  for (const c of corners) {
-    ctx.fillStyle = "#0f6b4c";
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, 4, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  ctx.fillStyle = "#1a1f1c";
-  ctx.beginPath();
-  ctx.arc(cen.x, cen.y, 5, 0, Math.PI * 2);
-  ctx.fill();
-
-  if (probe) {
-    const p = project(probe.lat, probe.lon);
-    ctx.fillStyle = "#8b2e2e";
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
-    ctx.fill();
-  }
 }
 
 function runEncode(): void {
@@ -203,7 +299,7 @@ function renderDecode(
     <span><strong>header</strong> ${toBitString(result.header, HEADER_WIDTH)}</span>
     <span><strong>octant</strong> ${toBitString(result.octant, OCTANT_WIDTH)}</span>
   `;
-  drawSketch(result, probe);
+  showTriangle(result, probe);
 }
 
 function runDecode(): void {
